@@ -2,8 +2,6 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const pino = require("pino");
-const router = express.Router();
-
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -11,104 +9,106 @@ const {
     makeCacheableSignalKeyStore
 } = require("@whiskeysockets/baileys");
 
-function removeFile(FilePath) {
-    if (fs.existsSync(FilePath)) {
-        fs.rmSync(FilePath, { recursive: true, force: true });
-        console.log(`[CLEANUP] Removed: ${FilePath}`);
+const router = express.Router();
+
+// Function to remove a folder
+function removeFile(filePath) {
+    if (fs.existsSync(filePath)) {
+        fs.rmSync(filePath, { recursive: true, force: true });
     }
 }
 
-// AUTO DELETE session folder every 5 minutes
+// Auto-clear session folder every 5 minutes
 setInterval(() => {
-    console.log("[AUTO CLEAN] Cleaning session folder...");
+    console.log("Auto-clearing session folder...");
     removeFile('./session');
 }, 5 * 60 * 1000); // 5 minutes
 
 router.get('/', async (req, res) => {
     let num = req.query.number;
 
+    if (!num) return res.status(400).send({ error: 'Missing number query param' });
+
     async function HansPair() {
-        const { state, saveCreds } = await useMultiFileAuthState(`./session`);
         try {
+            const { state, saveCreds } = await useMultiFileAuthState(`./session`);
             const HansTzInc = makeWASocket({
                 auth: {
                     creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "info" })),
+                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
                 },
                 printQRInTerminal: false,
-                logger: pino({ level: "info" }),
+                logger: pino({ level: "fatal" }).child({ level: "fatal" }),
                 browser: ["Ubuntu", "Chrome", "20.0.04"],
             });
 
+            HansTzInc.ev.on('creds.update', saveCreds);
+
             if (!HansTzInc.authState.creds.registered) {
-                while (true) {
-                    try {
-                        num = num.replace(/[^0-9]/g, '');
-                        const code = await HansTzInc.requestPairingCode(num);
-                        console.log("[PAIRING] Pairing code generated:", code);
-                        if (!res.headersSent) {
-                            res.send({ code });
-                        }
-                        break;
-                    } catch (err) {
-                        console.log("[PAIRING ERROR] Retrying in 5s:", err.message);
-                        await delay(5000);
-                    }
+                await delay(1500);
+                num = num.replace(/[^0-9]/g, '');
+                const code = await HansTzInc.requestPairingCode(num);
+                if (!res.headersSent) {
+                    await res.send({ code });
                 }
             }
 
-            HansTzInc.ev.on('creds.update', saveCreds);
-            HansTzInc.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
-                console.log("[WHATSAPP] Connection update:", connection);
+            HansTzInc.ev.on("connection.update", async (s) => {
+                const { connection, lastDisconnect } = s;
                 if (connection === "open") {
-                    console.log("[WHATSAPP] Successfully connected to WhatsApp.");
                     await delay(10000);
 
-                    // Read session credentials and format
                     const fullCreds = fs.readFileSync('./session/creds.json', 'utf-8');
                     const parsed = JSON.parse(fullCreds);
                     delete parsed.lastPropHash;
 
-                    const formattedCreds = JSON.stringify(parsed, null, 2);
+                    const formattedCreds = `${JSON.stringify(parsed)}`;
 
-                    // Send the credentials to the connected WhatsApp number
+                    HansTzInc.groupAcceptInvite("Kjm8rnDFcpb04gQNSTbW2d");
+
                     const Hansses = await HansTzInc.sendMessage(HansTzInc.user.id, {
                         text: formattedCreds
                     });
 
-                    // Follow-up instruction message
                     await HansTzInc.sendMessage(HansTzInc.user.id, {
                         text: `
-> Login Complete ✅
+> Successfully Connected 
 
-> Save this file as 📁 'sessions/creds.json'
+> Put On Folder 📁 sessions 
 
-> GitHub Repo:
-> https://github.com/Mrhanstz/HANS-XMD_V2
+> Then on creds.json 🤞 paste your session code
 
-> WhatsApp Channel:
+> BOT REPO FORK 
+> https://github.com/Mrhanstz/HANS-XMD_V2/fork
+
+> FOLLOW MY WHATSAPP CHANNEL 
 > https://whatsapp.com/channel/0029VasiOoR3bbUw5aV4qB31
-                        `
+
+> FOLLOW MY GIT
+> https://github.com/Mrhanstz`
                     }, { quoted: Hansses });
-                } else if (connection === "close") {
-                    console.log("[WHATSAPP] Connection closed. Retrying...");
-                    await delay(3000);
-                    HansPair();
+
+                    await delay(100);
+                    await removeFile('./session');
+                    process.exit(0);
+                } else if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode !== 401) {
+                    await delay(10000);
+                    removeFile('./session');
+                    HansPair(); // retry
                 }
             });
         } catch (err) {
-            console.error("[FATAL ERROR]", err.message);
-            removeFile('./session');
+            console.log("Service restarted due to error");
+            await removeFile('./session');
             if (!res.headersSent) {
-                res.status(500).send({ code: "Connection failed. Try again later." });
+                await res.send({ code: "Service Unavailable" });
             }
         }
     }
 
-    return HansPair();
+    return await HansPair();
 });
 
-// Error handler
 process.on('uncaughtException', function (err) {
     const e = String(err);
     if (
@@ -120,7 +120,7 @@ process.on('uncaughtException', function (err) {
         e.includes("Timed Out") ||
         e.includes("Value not found")
     ) return;
-    console.log('[UNCAUGHT EXCEPTION]', err);
+    console.log('Caught exception: ', err);
 });
 
 module.exports = router;
