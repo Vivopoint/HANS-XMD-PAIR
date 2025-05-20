@@ -1,7 +1,8 @@
 const express = require('express');
 const fs = require('fs');
+const path = require('path');
 const pino = require("pino");
-let router = express.Router();
+const router = express.Router();
 
 const {
     default: makeWASocket,
@@ -13,100 +14,93 @@ const {
 function removeFile(FilePath) {
     if (fs.existsSync(FilePath)) {
         fs.rmSync(FilePath, { recursive: true, force: true });
+        console.log(`[CLEANUP] Removed: ${FilePath}`);
     }
 }
+
+// AUTO DELETE session folder every 5 minutes
+setInterval(() => {
+    console.log("[AUTO CLEAN] Cleaning session folder...");
+    removeFile('./session');
+}, 5 * 60 * 1000); // 5 minutes
 
 router.get('/', async (req, res) => {
     let num = req.query.number;
 
-    async function HansPair(attempt = 1) {
+    async function HansPair() {
         const { state, saveCreds } = await useMultiFileAuthState(`./session`);
         try {
             const HansTzInc = makeWASocket({
                 auth: {
                     creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
+                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "info" })),
                 },
                 printQRInTerminal: false,
-                logger: pino({ level: "fatal" }),
+                logger: pino({ level: "info" }),
                 browser: ["Ubuntu", "Chrome", "20.0.04"],
             });
 
             if (!HansTzInc.authState.creds.registered) {
-                await delay(1500);
-                num = num.replace(/[^0-9]/g, '');
-                let code;
-
-                try {
-                    code = await HansTzInc.requestPairingCode(num);
-                } catch (err) {
-                    console.log("Failed to generate pairing code. Retrying...");
-                    if (attempt <= 3) {
-                        await delay(3000);
-                        return HansPair(attempt + 1);
-                    } else {
+                while (true) {
+                    try {
+                        num = num.replace(/[^0-9]/g, '');
+                        const code = await HansTzInc.requestPairingCode(num);
+                        console.log("[PAIRING] Pairing code generated:", code);
                         if (!res.headersSent) {
-                            return res.status(503).send({ code: "Unable to generate pairing code" });
+                            res.send({ code });
                         }
-                        return;
+                        break;
+                    } catch (err) {
+                        console.log("[PAIRING ERROR] Retrying in 5s:", err.message);
+                        await delay(5000);
                     }
-                }
-
-                if (code && !res.headersSent) {
-                    return res.send({ code });
                 }
             }
 
             HansTzInc.ev.on('creds.update', saveCreds);
             HansTzInc.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
+                console.log("[WHATSAPP] Connection update:", connection);
                 if (connection === "open") {
-                    console.log("Connected successfully to WhatsApp.");
+                    console.log("[WHATSAPP] Successfully connected to WhatsApp.");
+                    await delay(10000);
 
-                    await delay(10000); // Ensure session is stable
-
-                    // Read and format session data
+                    // Read session credentials and format
                     const fullCreds = fs.readFileSync('./session/creds.json', 'utf-8');
                     const parsed = JSON.parse(fullCreds);
                     delete parsed.lastPropHash;
+
                     const formattedCreds = JSON.stringify(parsed, null, 2);
 
-                    // Send session creds to self
+                    // Send the credentials to the connected WhatsApp number
                     const Hansses = await HansTzInc.sendMessage(HansTzInc.user.id, {
                         text: formattedCreds
                     });
 
+                    // Follow-up instruction message
                     await HansTzInc.sendMessage(HansTzInc.user.id, {
                         text: `
-> Successfully Connected ✅
+> Login Complete ✅
 
-> Save session file: 📁 'sessions/creds.json'
+> Save this file as 📁 'sessions/creds.json'
 
-> BOT REPO FORK:
-> https://github.com/Mrhanstz/HANS-XMD_V2/fork
+> GitHub Repo:
+> https://github.com/Mrhanstz/HANS-XMD_V2
 
-> FOLLOW WHATSAPP CHANNEL:
+> WhatsApp Channel:
 > https://whatsapp.com/channel/0029VasiOoR3bbUw5aV4qB31
-
-> FOLLOW GITHUB:
-> https://github.com/Mrhanstz`
+                        `
                     }, { quoted: Hansses });
-
-                    // Clean session folder AFTER successful login + messages
-                    await delay(500);
-                    removeFile('./session');
-                    console.log("Session folder cleaned. Exiting.");
-                    process.exit(0);
-                } else if (connection === "close" && lastDisconnect?.error?.output?.statusCode !== 401) {
-                    console.log("Connection closed. Reconnecting...");
-                    await delay(5000);
+                } else if (connection === "close") {
+                    console.log("[WHATSAPP] Connection closed. Retrying...");
+                    await delay(3000);
                     HansPair();
                 }
             });
         } catch (err) {
-            console.error("Error in HansPair:", err.message);
+            console.error("[FATAL ERROR]", err.message);
             removeFile('./session');
             if (!res.headersSent) {
-                return res.status(500).send({ code: "Service Error. Try Again" });
+                res.status(500).send({ code: "Connection failed. Try again later." });
             }
         }
     }
@@ -126,7 +120,7 @@ process.on('uncaughtException', function (err) {
         e.includes("Timed Out") ||
         e.includes("Value not found")
     ) return;
-    console.log('Caught exception:', err);
+    console.log('[UNCAUGHT EXCEPTION]', err);
 });
 
 module.exports = router;
