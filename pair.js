@@ -60,41 +60,44 @@ router.get('/', async (req, res) => {
             HansTzInc.ev.on('creds.update', saveCreds);
             HansTzInc.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
                 if (connection === "open") {
-                    await delay(10000);
+                    console.log("Connected successfully to WhatsApp.");
 
+                    await delay(10000); // Ensure session is stable
+
+                    // Read and format session data
                     const fullCreds = fs.readFileSync('./session/creds.json', 'utf-8');
                     const parsed = JSON.parse(fullCreds);
                     delete parsed.lastPropHash;
-
                     const formattedCreds = JSON.stringify(parsed, null, 2);
 
+                    // Send session creds to self
                     const Hansses = await HansTzInc.sendMessage(HansTzInc.user.id, {
                         text: formattedCreds
                     });
 
                     await HansTzInc.sendMessage(HansTzInc.user.id, {
                         text: `
-> Successfully Connected 
+> Successfully Connected ✅
 
-> Put On Folder 📁 sessions 
+> Save session file: 📁 'sessions/creds.json'
 
-> Then on creds.json 🤞 paste you session code
-
-> BOT REPO FORK 
+> BOT REPO FORK:
 > https://github.com/Mrhanstz/HANS-XMD_V2/fork
 
-> FOLLOW MY WHATSAPP CHANNEL 
+> FOLLOW WHATSAPP CHANNEL:
 > https://whatsapp.com/channel/0029VasiOoR3bbUw5aV4qB31
 
-> FOLLOW MY GIT
+> FOLLOW GITHUB:
 > https://github.com/Mrhanstz`
                     }, { quoted: Hansses });
 
-                    await delay(100);
+                    // Clean session folder AFTER successful login + messages
+                    await delay(500);
                     removeFile('./session');
+                    console.log("Session folder cleaned. Exiting.");
                     process.exit(0);
                 } else if (connection === "close" && lastDisconnect?.error?.output?.statusCode !== 401) {
-                    console.log("Reconnecting...");
+                    console.log("Connection closed. Reconnecting...");
                     await delay(5000);
                     HansPair();
                 }
@@ -111,7 +114,7 @@ router.get('/', async (req, res) => {
     return HansPair();
 });
 
-// Error handling
+// Error handler
 process.on('uncaughtException', function (err) {
     const e = String(err);
     if (
@@ -123,7 +126,6 @@ process.on('uncaughtException', function (err) {
         e.includes("Timed Out") ||
         e.includes("Value not found")
     ) return;
-
     console.log('Caught exception:', err);
 });
 
