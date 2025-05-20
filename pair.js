@@ -1,6 +1,6 @@
 const express = require('express');
 const fs = require('fs');
-const path = require('path');
+let router = express.Router();
 const pino = require("pino");
 const {
     default: makeWASocket,
@@ -9,30 +9,18 @@ const {
     makeCacheableSignalKeyStore
 } = require("@whiskeysockets/baileys");
 
-const router = express.Router();
-
-// Function to remove a folder
-function removeFile(filePath) {
-    if (fs.existsSync(filePath)) {
-        fs.rmSync(filePath, { recursive: true, force: true });
-    }
+function removeFile(FilePath) {
+    if (!fs.existsSync(FilePath)) return false;
+    fs.rmSync(FilePath, { recursive: true, force: true });
 }
-
-// Auto-clear session folder every 5 minutes
-setInterval(() => {
-    console.log("Auto-clearing session folder...");
-    removeFile('./session');
-}, 5 * 60 * 1000); // 5 minutes
 
 router.get('/', async (req, res) => {
     let num = req.query.number;
 
-    if (!num) return res.status(400).send({ error: 'Missing number query param' });
-
     async function HansPair() {
+        const { state, saveCreds } = await useMultiFileAuthState(`./session`);
         try {
-            const { state, saveCreds } = await useMultiFileAuthState(`./session`);
-            const HansTzInc = makeWASocket({
+            let HansTzInc = makeWASocket({
                 auth: {
                     creds: state.creds,
                     keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
@@ -41,8 +29,6 @@ router.get('/', async (req, res) => {
                 logger: pino({ level: "fatal" }).child({ level: "fatal" }),
                 browser: ["Ubuntu", "Chrome", "20.0.04"],
             });
-
-            HansTzInc.ev.on('creds.update', saveCreds);
 
             if (!HansTzInc.authState.creds.registered) {
                 await delay(1500);
@@ -53,9 +39,10 @@ router.get('/', async (req, res) => {
                 }
             }
 
+            HansTzInc.ev.on('creds.update', saveCreds);
             HansTzInc.ev.on("connection.update", async (s) => {
                 const { connection, lastDisconnect } = s;
-                if (connection === "open") {
+                if (connection == "open") {
                     await delay(10000);
 
                     const fullCreds = fs.readFileSync('./session/creds.json', 'utf-8');
@@ -76,7 +63,7 @@ router.get('/', async (req, res) => {
 
 > Put On Folder 📁 sessions 
 
-> Then on creds.json 🤞 paste your session code
+> Then on creds.json 🤞 paste you session code
 
 > BOT REPO FORK 
 > https://github.com/Mrhanstz/HANS-XMD_V2/fork
@@ -91,14 +78,13 @@ router.get('/', async (req, res) => {
                     await delay(100);
                     await removeFile('./session');
                     process.exit(0);
-                } else if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode !== 401) {
+                } else if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode != 401) {
                     await delay(10000);
-                    removeFile('./session');
-                    HansPair(); // retry
+                    HansPair();
                 }
             });
         } catch (err) {
-            console.log("Service restarted due to error");
+            console.log("service restated");
             await removeFile('./session');
             if (!res.headersSent) {
                 await res.send({ code: "Service Unavailable" });
@@ -110,16 +96,14 @@ router.get('/', async (req, res) => {
 });
 
 process.on('uncaughtException', function (err) {
-    const e = String(err);
-    if (
-        e.includes("conflict") ||
-        e.includes("Socket connection timeout") ||
-        e.includes("not-authorized") ||
-        e.includes("rate-overlimit") ||
-        e.includes("Connection Closed") ||
-        e.includes("Timed Out") ||
-        e.includes("Value not found")
-    ) return;
+    let e = String(err);
+    if (e.includes("conflict")) return;
+    if (e.includes("Socket connection timeout")) return;
+    if (e.includes("not-authorized")) return;
+    if (e.includes("rate-overlimit")) return;
+    if (e.includes("Connection Closed")) return;
+    if (e.includes("Timed Out")) return;
+    if (e.includes("Value not found")) return;
     console.log('Caught exception: ', err);
 });
 
